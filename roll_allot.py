@@ -1,95 +1,81 @@
 import streamlit as st
 import pandas as pd
 
-st.set_page_config(page_title="Roll Allotment (Two Excel)", layout="wide")
-st.title("🎓 Roll Number Allotment – Two Excel Inputs")
+st.set_page_config(page_title="Roll & Lab Allotment", layout="wide")
+st.title("🎓 Roll Number + Venue & Lab Allotment")
 
 # Upload files
-col1, col2 = st.columns(2)
+cand_file = st.file_uploader("Upload Candidate Excel", type=["xlsx"])
+lab_file = st.file_uploader("Upload Venue / Lab Master Excel", type=["xlsx"])
 
-with col1:
-    cand_file = st.file_uploader(
-        "Upload Candidate Excel",
-        type=["xlsx"],
-        key="cand"
-    )
+if cand_file and lab_file:
+    df_cand = pd.read_excel(cand_file, engine="openpyxl")
+    df_lab = pd.read_excel(lab_file, engine="openpyxl")
 
-with col2:
-    center_file = st.file_uploader(
-        "Upload Center Details Excel",
-        type=["xlsx"],
-        key="center"
-    )
-
-if cand_file and center_file:
-    df_cand = pd.read_excel(cand_file)
-    df_center = pd.read_excel(center_file)
-
-    st.subheader("📄 Candidate Data Preview")
+    st.subheader("📄 Candidate Preview")
     st.dataframe(df_cand.head(), use_container_width=True)
 
-    st.subheader("🏫 Center Data Preview")
-    st.dataframe(df_center.head(), use_container_width=True)
+    st.subheader("🏫 Venue & Lab Preview")
+    st.dataframe(df_lab, use_container_width=True)
 
     st.subheader("⚙️ Configuration")
 
-    # Column selections
-    appl_col = st.selectbox("Application Number Column", df_cand.columns, index=df_cand.columns.get_loc("ApplNo"))
-    date_col = st.selectbox("Final Submission Date Column", df_cand.columns, index=df_cand.columns.get_loc("FSubDate"))
+    appl_col = st.selectbox("Application No Column", df_cand.columns, index=df_cand.columns.get_loc("ApplNo"))
+    date_col = st.selectbox("Submission Date Column", df_cand.columns, index=df_cand.columns.get_loc("FSubDate"))
 
-    cand_center_col = st.selectbox(
-        "Candidate Center Column",
-        df_cand.columns,
-        index=df_cand.columns.get_loc("Center1")
-    )
+    roll_start = st.number_input("Roll Number Start From", value=7100001, step=1)
 
-    center_key_col = st.selectbox(
-        "Center Master Key Column",
-        df_center.columns
-    )
+    if st.button("🚀 Generate Roll + Lab Allotment"):
 
-    roll_start = st.number_input(
-        "Roll Number Start From",
-        min_value=1,
-        value=7100001,
-        step=1
-    )
-
-    if st.button("🚀 Generate Roll Numbers"):
-        # Date conversion
+        # Sort candidates
         df_cand[date_col] = pd.to_datetime(df_cand[date_col], errors="coerce")
-
-        # Sort
         df_cand = df_cand.sort_values(
             by=[appl_col, date_col],
             ascending=[True, True]
         ).reset_index(drop=True)
 
-        # Roll generation
+        # Generate Roll Numbers
         df_cand["RollNo"] = range(roll_start, roll_start + len(df_cand))
 
-        # Merge center details
-        df_final = df_cand.merge(
-            df_center,
-            how="left",
-            left_on=cand_center_col,
-            right_on=center_key_col
+        # Prepare lab capacity list
+        lab_rows = []
+        for _, row in df_lab.iterrows():
+            for _ in range(int(row["Strength"])):
+                lab_rows.append({
+                    "Venue No": row["Venue No."],
+                    "Centre Name": row["Centre Name"],
+                    "Lab name": row["Lab name"],
+                    "District": row["District"]
+                })
+
+        df_lab_expanded = pd.DataFrame(lab_rows)
+
+        # Capacity validation
+        if len(df_cand) > len(df_lab_expanded):
+            st.error("❌ Total candidates exceed available lab capacity!")
+            st.stop()
+
+        # Assign labs sequentially
+        df_final = pd.concat(
+            [df_cand.reset_index(drop=True),
+             df_lab_expanded.iloc[:len(df_cand)].reset_index(drop=True)],
+            axis=1
         )
 
-        st.subheader("✅ Final Roll Allotted Data")
+        st.subheader("✅ Final Allotment Preview")
         st.dataframe(
-            df_final[[appl_col, "RollNo", cand_center_col]].head(20),
+            df_final[[appl_col, "RollNo", "Venue No", "Lab name"]].head(25),
             use_container_width=True
         )
 
-        # Download
-        output_file = "roll_allotted_with_centers.xlsx"
+        # Export
+        output_file = "roll_lab_allotted.xlsx"
         df_final.to_excel(output_file, index=False)
 
         with open(output_file, "rb") as f:
             st.download_button(
-                "⬇️ Download Final Excel",
-                data=f,
+                "⬇️ Download Final Allotted Excel",
+                f,
                 file_name=output_file,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
