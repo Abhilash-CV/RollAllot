@@ -20,7 +20,7 @@ if not cand_file or not lab_file:
     st.stop()
 
 # -------------------------------------------------
-# READ EXCEL FILES
+# READ FILES
 # -------------------------------------------------
 df_cand = pd.read_excel(cand_file, engine="openpyxl")
 df_lab = pd.read_excel(lab_file, engine="openpyxl")
@@ -33,8 +33,8 @@ df_lab.columns = df_lab.columns.str.strip()
 # -------------------------------------------------
 st.subheader("⚙️ Configuration")
 
-appl_col = st.selectbox("Application No Column", df_cand.columns, index=df_cand.columns.get_loc("ApplNo"))
-date_col = st.selectbox("Final Submission Date Column", df_cand.columns, index=df_cand.columns.get_loc("FSubDate"))
+appl_col = st.selectbox("Application No Column", df_cand.columns)
+date_col = st.selectbox("Final Submission Date Column", df_cand.columns)
 
 pref_cols = st.multiselect(
     "Preference Columns (District order)",
@@ -96,15 +96,15 @@ if st.button("🚀 Generate Allotment + Reports"):
         })
 
     # -----------------------------
-    # CORE ALLOTMENT LOGIC
+    # CORE ALLOTMENT
     # -----------------------------
     for i, cand in df_cand.iterrows():
         for p_idx, pref in enumerate(pref_cols, start=1):
-            dist = cand[pref]
-            if pd.isna(dist):
+            pref_dist = cand[pref]
+            if pd.isna(pref_dist):
                 continue
             for lab in labs:
-                if lab["District"] == dist and lab["Remaining"] > 0:
+                if lab["District"] == pref_dist and lab["Remaining"] > 0:
                     df_cand.loc[i, [
                         "Allot_Code", "Allot_Venue", "Allot_Centre",
                         "Allot_District", "Allot_Lab", "Allot_Pref"
@@ -125,9 +125,10 @@ if st.button("🚀 Generate Allotment + Reports"):
         .fillna("Not Allotted")
         .value_counts()
         .reset_index()
-        .rename(columns={"index": "Preference", "Allot_Pref": "Count"})
     )
 
+    # FORCE STABLE COLUMNS
+    pref_report.columns = ["Preference", "Count"]
     pref_report["Count"] = pd.to_numeric(pref_report["Count"], errors="coerce")
     pref_report["Percentage"] = (
         pref_report["Count"] / float(len(df_cand)) * 100
@@ -137,7 +138,7 @@ if st.button("🚀 Generate Allotment + Reports"):
     st.dataframe(pref_report, use_container_width=True)
 
     # =========================================================
-    # REPORT 2: DISTRICT-WISE PREFERENCE REPORT
+    # REPORT 2: DISTRICT-WISE PREFERENCE
     # =========================================================
     district_pref = (
         df_cand
@@ -208,7 +209,7 @@ if st.button("🚀 Generate Allotment + Reports"):
             sheet.to_excel(writer, sheet_name=name[:31], index=False)
 
     # =========================================================
-    # AUTO SUMMARY PDF
+    # AUTO SUMMARY PDF (ERROR-PROOF)
     # =========================================================
     pdf_file = "allotment_summary.pdf"
     c = canvas.Canvas(pdf_file, pagesize=A4)
@@ -232,8 +233,13 @@ if st.button("🚀 Generate Allotment + Reports"):
 
     y -= 15
     c.setFont("Helvetica", 10)
+
+    # SAFE INDEX-BASED ACCESS (NO KEYERROR EVER)
     for _, r in pref_report.iterrows():
-        c.drawString(40, y, f"{r['Preference']}: {int(r['Count'])} ({r['Percentage']}%)")
+        c.drawString(
+            40, y,
+            f"{r.iloc[0]}: {int(r.iloc[1])} ({r.iloc[2]}%)"
+        )
         y -= 12
 
     y -= 20
