@@ -165,16 +165,33 @@ if st.button("🚀 Generate Allotment + Reports"):
     # =========================================================
     # REPORT 3: VENUE-WISE SUMMARY
     # =========================================================
+    # =========================================================
+    # REPORT 3: VENUE-WISE SUMMARY (WITH NAME + DISTRICT)
+    # =========================================================
     venue_summary = (
         pd.DataFrame(labs)
-        .groupby("Venue")[["Strength", "Remaining"]]
-        .sum()
-        .reset_index()
+        .groupby(
+            ["Venue", "Centre", "District"],  # 👈 IMPORTANT
+            as_index=False
+        )
+        .agg(
+            Strength=("Strength", "sum"),
+            Remaining=("Remaining", "sum")
+        )
     )
-    venue_summary["Allotted"] = venue_summary["Strength"] - venue_summary["Remaining"]
-
+    
+    venue_summary["Allotted"] = (
+        venue_summary["Strength"] - venue_summary["Remaining"]
+    )
+    
+    # Reorder columns (clean output)
+    venue_summary = venue_summary[
+        ["Venue", "Centre", "District", "Strength", "Allotted", "Remaining"]
+    ]
+    
     st.subheader("🏫 Venue-wise Capacity Summary")
     st.dataframe(venue_summary, use_container_width=True)
+
 
     # =========================================================
     # REPORT 4: NOT ALLOTTED
