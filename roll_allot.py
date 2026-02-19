@@ -104,6 +104,9 @@ if st.button("🚀 Generate Allotment + Reports"):
     # =========================
     # REPORT 1: Preference Satisfaction
     # =========================
+    # =========================
+    # REPORT 1: Preference Satisfaction
+    # =========================
     pref_report = (
         df_cand["Allot_Pref"]
         .fillna("Not Allotted")
@@ -111,11 +114,16 @@ if st.button("🚀 Generate Allotment + Reports"):
         .reset_index()
         .rename(columns={"index": "Preference", "Allot_Pref": "Count"})
     )
-
+    
+    # 🔒 FORCE NUMERIC TYPE
+    pref_report["Count"] = pd.to_numeric(
+        pref_report["Count"], errors="coerce"
+    )
+    
     pref_report["Percentage"] = (
-        pref_report["Count"] / len(df_cand) * 100
+        pref_report["Count"] / float(len(df_cand)) * 100
     ).round(2)
-
+    
     st.subheader("📊 Preference Satisfaction Report")
     st.dataframe(pref_report, use_container_width=True)
 
