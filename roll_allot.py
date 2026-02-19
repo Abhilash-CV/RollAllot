@@ -1,181 +1,121 @@
 import streamlit as st
 import pandas as pd
 
-st.set_page_config(page_title="Roll & Lab Allotment", layout="wide")
-st.title("🎓 Roll Number + Exact Venue & Lab Allotment")
+st.set_page_config(page_title="Preference Based Lab Allotment", layout="wide")
+st.title("🎓 Preference Based Centre / Lab Allotment")
 
-# =========================
-# FILE UPLOAD
-# =========================
+# =====================
+# Upload files
+# =====================
 cand_file = st.file_uploader("Upload Candidate Excel", type=["xlsx"])
-lab_file = st.file_uploader("Upload Venue / Lab Excel", type=["xlsx"])
+lab_file = st.file_uploader("Upload Lab Capacity Excel", type=["xlsx"])
 
 if not cand_file or not lab_file:
-    st.info("📂 Please upload BOTH Candidate and Venue/Lab Excel files.")
+    st.info("Upload both files to continue")
     st.stop()
 
-# =========================
-# READ FILES
-# =========================
+# =====================
+# Read data
+# =====================
 df_cand = pd.read_excel(cand_file, engine="openpyxl")
 df_lab = pd.read_excel(lab_file, engine="openpyxl")
 
-# =========================
-# CLEAN COLUMN NAMES
-# =========================
+# Clean columns
 df_cand.columns = df_cand.columns.str.strip()
 df_lab.columns = df_lab.columns.str.strip()
 
-# =========================
-# PREVIEW
-# =========================
-st.subheader("📄 Candidate Data Preview")
-st.dataframe(df_cand.head(), use_container_width=True)
-
-st.subheader("🏫 Venue / Lab Master Preview (ROW ORDER IS FINAL)")
-st.dataframe(df_lab, use_container_width=True)
-
-# =========================
-# CONFIGURATION
-# =========================
+# =====================
+# Configuration
+# =====================
 st.subheader("⚙️ Configuration")
 
-c1, c2, c3 = st.columns(3)
+appl_col = st.selectbox("ApplNo Column", df_cand.columns, index=df_cand.columns.get_loc("ApplNo"))
+date_col = st.selectbox("FSubDate Column", df_cand.columns, index=df_cand.columns.get_loc("FSubDate"))
 
-with c1:
-    appl_col = st.selectbox(
-        "Application No Column",
-        df_cand.columns,
-        index=df_cand.columns.get_loc("ApplNo")
-    )
+pref_cols = st.multiselect(
+    "Preference Columns (in order)",
+    df_cand.columns,
+    default=["Center1", "Center2", "Center3"]
+)
 
-with c2:
-    date_col = st.selectbox(
-        "Final Submission Date Column",
-        df_cand.columns,
-        index=df_cand.columns.get_loc("FSubDate")
-    )
+district_col = st.selectbox("District Column (Lab Excel)", df_lab.columns)
+lab_col = st.selectbox("Lab Name Column", df_lab.columns)
+strength_col = st.selectbox("Strength Column", df_lab.columns)
 
-with c3:
-    roll_start = st.number_input(
-        "Roll Number Start From",
-        value=7100001,
-        step=1
-    )
+roll_start = st.number_input("Roll No Start", value=7100001, step=1)
 
-st.markdown("### 🏫 Venue / Lab Columns")
+# =====================
+# Process
+# =====================
+if st.button("🚀 Generate Preference Based Allotment"):
 
-l1, l2, l3 = st.columns(3)
-l4, l5, l6 = st.columns(3)
-
-with l1:
-    code_col = st.selectbox("Code Column", df_lab.columns)
-with l2:
-    venue_col = st.selectbox("Venue No Column", df_lab.columns)
-with l3:
-    centre_col = st.selectbox("Centre Name Column", df_lab.columns)
-
-with l4:
-    lab_col = st.selectbox("Lab Name Column", df_lab.columns)
-with l5:
-    strength_col = st.selectbox("Strength / Capacity Column", df_lab.columns)
-with l6:
-    district_col = st.selectbox("District Column", df_lab.columns)
-
-# =========================
-# PROCESS
-# =========================
-if st.button("🚀 Generate Roll & Exact Lab Allotment"):
-
-    # -------------------------
-    # SORT CANDIDATES
-    # -------------------------
+    # Sort candidates
     df_cand[date_col] = pd.to_datetime(df_cand[date_col], errors="coerce")
+    df_cand = df_cand.sort_values([appl_col, date_col]).reset_index(drop=True)
 
-    df_cand = df_cand.sort_values(
-        by=[appl_col, date_col],
-        ascending=[True, True]
-    ).reset_index(drop=True)
+    df_cand["RollNo"] = range(roll_start, roll_start + len(df_cand))
+    df_cand["AllottedDistrict"] = None
+    df_cand["AllottedLab"] = None
 
-    # -------------------------
-    # ASSIGN ROLL NUMBERS
-    # -------------------------
-    df_cand["RollNo"] = range(
-        roll_start,
-        roll_start + len(df_cand)
-    )
+    # Build capacity tracker
+    lab_capacity = []
 
-    # -------------------------
-    # GENERATE SEAT MAP
-    # (STRICT ROW ORDER)
-    # -------------------------
-    seat_rows = []
-
-    for _, lab in df_lab.iterrows():
-
-        cap = pd.to_numeric(lab[strength_col], errors="coerce")
-
+    for _, row in df_lab.iterrows():
+        cap = pd.to_numeric(row[strength_col], errors="coerce")
         if pd.isna(cap) or cap <= 0:
             continue
 
-        cap = int(cap)
+        lab_capacity.append({
+            "District": row[district_col],
+            "Lab": row[lab_col],
+            "Remaining": int(cap)
+        })
 
-        for seat_no in range(1, cap + 1):
-            seat_rows.append({
-                "Code": lab[code_col],
-                "Venue No": lab[venue_col],
-                "Centre Name": lab[centre_col],
-                "Lab name": lab[lab_col],
-                "District": lab[district_col],
-                "SeatNo": seat_no
-            })
+    # =====================
+    # CORE ALLOTMENT LOGIC
+    # =====================
+    for idx, cand in df_cand.iterrows():
 
-    df_seats = pd.DataFrame(seat_rows)
+        for pref in pref_cols:
+            pref_district = cand[pref]
 
-    # -------------------------
-    # CAPACITY CHECK
-    # -------------------------
-    if len(df_cand) > len(df_seats):
-        st.error(
-            f"❌ Capacity insufficient!\n\n"
-            f"Candidates: {len(df_cand)}\n"
-            f"Available seats: {len(df_seats)}"
-        )
-        st.stop()
+            if pd.isna(pref_district):
+                continue
 
-    # -------------------------
-    # FINAL ALLOTMENT
-    # -------------------------
-    df_final = pd.concat(
-        [
-            df_cand.reset_index(drop=True),
-            df_seats.iloc[:len(df_cand)].reset_index(drop=True)
-        ],
-        axis=1
-    )
+            for lab in lab_capacity:
+                if (
+                    lab["District"] == pref_district
+                    and lab["Remaining"] > 0
+                ):
+                    # Allot
+                    df_cand.at[idx, "AllottedDistrict"] = lab["District"]
+                    df_cand.at[idx, "AllottedLab"] = lab["Lab"]
+                    lab["Remaining"] -= 1
+                    break
+            if df_cand.at[idx, "AllottedDistrict"] is not None:
+                break
 
-    # =========================
-    # PREVIEW RESULT
-    # =========================
-    st.subheader("✅ Final Allotment Preview")
-
+    # =====================
+    # Result
+    # =====================
+    st.subheader("✅ Allotment Preview")
     st.dataframe(
-        df_final[
-            [appl_col, "RollNo", "Code", "Venue No", "Lab name", "SeatNo"]
+        df_cand[
+            [appl_col, "RollNo", "AllottedDistrict", "AllottedLab"]
         ].head(40),
         use_container_width=True
     )
 
-    # =========================
-    # DOWNLOAD
-    # =========================
-    output_file = "roll_venue_lab_exact.xlsx"
-    df_final.to_excel(output_file, index=False)
+    # =====================
+    # Download
+    # =====================
+    output = "preference_based_allotment.xlsx"
+    df_cand.to_excel(output, index=False)
 
-    with open(output_file, "rb") as f:
+    with open(output, "rb") as f:
         st.download_button(
-            "⬇️ Download Final Allotted Excel",
+            "⬇️ Download Allotment Result",
             data=f,
-            file_name=output_file,
+            file_name=output,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
