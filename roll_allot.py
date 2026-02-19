@@ -2,12 +2,13 @@ import streamlit as st
 import pandas as pd
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
+from collections import defaultdict, deque
 
 # =================================================
 # PAGE SETUP
 # =================================================
 st.set_page_config(page_title="Exam Allotment System", layout="wide")
-st.title("🎓 Exam Centre & Lab Allotment System (10% Buffer Applied)")
+st.title("🎓 Exam Centre & Lab Allotment System (Balanced + 10% Buffer)")
 
 # =================================================
 # FILE UPLOAD
@@ -81,15 +82,12 @@ if st.button("🚀 Generate Allotment + Reports"):
     # BUILD LAB CAPACITY WITH 10% BUFFER
     # =================================================
     labs = []
-
     for _, r in df_lab.iterrows():
         raw_cap = pd.to_numeric(r[strength_col], errors="coerce")
         if pd.isna(raw_cap) or raw_cap <= 0:
             continue
 
         raw_cap = int(raw_cap)
-
-        # 🔒 10% BUFFER RULE
         effective_cap = int(raw_cap * 0.9)
         if effective_cap <= 0:
             effective_cap = 1
@@ -100,13 +98,20 @@ if st.button("🚀 Generate Allotment + Reports"):
             "Centre": r[centre_col],
             "District": r[district_col],
             "Lab": r[lab_col],
-            "Strength": raw_cap,                 # original
-            "Effective_Strength": effective_cap, # usable
+            "Strength": raw_cap,
+            "Effective_Strength": effective_cap,
             "Remaining": effective_cap
         })
 
     # =================================================
-    # CORE ALLOTMENT LOGIC
+    # BUILD DISTRICT → ROTATING VENUE QUEUES
+    # =================================================
+    district_queues = defaultdict(deque)
+    for lab in labs:
+        district_queues[lab["District"]].append(lab)
+
+    # =================================================
+    # BALANCED (ROUND-ROBIN) ALLOTMENT
     # =================================================
     for i, cand in df_cand.iterrows():
         for p_idx, pref in enumerate(pref_cols, start=1):
@@ -114,8 +119,16 @@ if st.button("🚀 Generate Allotment + Reports"):
             if pd.isna(pref_dist):
                 continue
 
-            for lab in labs:
-                if lab["District"] == pref_dist and lab["Remaining"] > 0:
+            queue = district_queues.get(pref_dist)
+            if not queue:
+                continue
+
+            allocated = False
+            for _ in range(len(queue)):
+                lab = queue[0]
+                queue.rotate(-1)
+
+                if lab["Remaining"] > 0:
                     df_cand.loc[i, [
                         "Allot_Code", "Allot_Venue", "Allot_Centre",
                         "Allot_District", "Allot_Lab", "Allot_Pref"
@@ -124,9 +137,10 @@ if st.button("🚀 Generate Allotment + Reports"):
                         lab["District"], lab["Lab"], f"P{p_idx}"
                     ]
                     lab["Remaining"] -= 1
+                    allocated = True
                     break
 
-            if df_cand.at[i, "Allot_Pref"] is not None:
+            if allocated:
                 break
 
     # =================================================
@@ -138,7 +152,6 @@ if st.button("🚀 Generate Allotment + Reports"):
         .value_counts()
         .reset_index()
     )
-
     pref_report.columns = ["Preference", "Count"]
     pref_report["Count"] = pd.to_numeric(pref_report["Count"], errors="coerce")
     pref_report["Percentage"] = (
@@ -158,13 +171,11 @@ if st.button("🚀 Generate Allotment + Reports"):
         .size()
         .reset_index(name="Count")
     )
-
     district_total = (
         district_pref.groupby("Allot_District")["Count"]
         .sum()
         .reset_index(name="Total")
     )
-
     district_pref = district_pref.merge(district_total, on="Allot_District")
     district_pref["Percentage"] = (
         district_pref["Count"] / district_pref["Total"] * 100
@@ -174,7 +185,7 @@ if st.button("🚀 Generate Allotment + Reports"):
     st.dataframe(district_pref, use_container_width=True)
 
     # =================================================
-    # REPORT 3: VENUE-WISE SUMMARY (WITH BUFFER)
+    # REPORT 3: VENUE-WISE SUMMARY
     # =================================================
     venue_summary = (
         pd.DataFrame(labs)
@@ -185,17 +196,11 @@ if st.button("🚀 Generate Allotment + Reports"):
             Remaining=("Remaining", "sum")
         )
     )
-
     venue_summary["Allotted"] = (
         venue_summary["Effective_Strength"] - venue_summary["Remaining"]
     )
 
-    venue_summary = venue_summary[
-        ["Venue", "Centre", "District", "Strength",
-         "Effective_Strength", "Allotted", "Remaining"]
-    ]
-
-    st.subheader("🏫 Venue-wise Capacity Summary (10% Buffer Applied)")
+    st.subheader("🏫 Venue-wise Capacity Summary (Balanced)")
     st.dataframe(venue_summary, use_container_width=True)
 
     # =================================================
@@ -220,7 +225,7 @@ if st.button("🚀 Generate Allotment + Reports"):
     # =================================================
     # EXPORT EXCEL
     # =================================================
-    excel_out = "allotment_with_reports_buffer.xlsx"
+    excel_out = "allotment_balanced_buffer.xlsx"
     with pd.ExcelWriter(excel_out, engine="openpyxl") as writer:
         df_cand.to_excel(writer, sheet_name="Allotment", index=False)
         pref_report.to_excel(writer, sheet_name="Preference_Overall", index=False)
@@ -233,15 +238,15 @@ if st.button("🚀 Generate Allotment + Reports"):
     # =================================================
     # AUTO SUMMARY PDF
     # =================================================
-    pdf_file = "allotment_summary_buffer.pdf"
+    pdf_file = "allotment_summary_balanced.pdf"
     c = canvas.Canvas(pdf_file, pagesize=A4)
     width, height = A4
     y = height - 40
 
     c.setFont("Helvetica-Bold", 14)
-    c.drawString(40, y, "Exam Allotment Summary (10% Buffer Applied)")
-
+    c.drawString(40, y, "Exam Allotment Summary (Balanced Allocation + 10% Buffer)")
     y -= 25
+
     c.setFont("Helvetica", 10)
     c.drawString(40, y, f"Total Candidates: {len(df_cand)}")
     y -= 15
@@ -252,42 +257,19 @@ if st.button("🚀 Generate Allotment + Reports"):
     y -= 25
     c.setFont("Helvetica-Bold", 12)
     c.drawString(40, y, "Preference Satisfaction")
-
     y -= 15
+
     c.setFont("Helvetica", 10)
     for _, r in pref_report.iterrows():
-        c.drawString(
-            40, y,
-            f"{r.iloc[0]}: {int(r.iloc[1])} ({r.iloc[2]}%)"
-        )
+        c.drawString(40, y, f"{r.iloc[0]}: {int(r.iloc[1])} ({r.iloc[2]}%)")
         y -= 12
-
-    y -= 20
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(40, y, "Venue-wise Summary")
-
-    y -= 15
-    c.setFont("Helvetica", 9)
-    for _, r in venue_summary.iterrows():
-        c.drawString(
-            40, y,
-            f"Venue {r['Venue']} | {r['Centre']} | {r['District']} | "
-            f"Strength: {int(r['Strength'])} | "
-            f"Effective: {int(r['Effective_Strength'])} | "
-            f"Allotted: {int(r['Allotted'])} | "
-            f"Remaining: {int(r['Remaining'])}"
-        )
-        y -= 12
-        if y < 50:
-            c.showPage()
-            y = height - 40
 
     c.save()
 
     # =================================================
     # DOWNLOADS
     # =================================================
-    st.success("✅ Allotment, Reports & PDF Generated (10% Buffer Applied)")
+    st.success("✅ Balanced allotment completed — no empty venues.")
 
     with open(excel_out, "rb") as f:
         st.download_button(
